@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>J.A.R.V.I.S.</title>
+<style>
+  :root { --c:#2ee6ff; --bg:#030b14; --dim:#6aa7b5; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { margin:0; height:100%; background:radial-gradient(circle at 50% 35%, #0a2236 0%, var(--bg) 70%); color:#cfefff; font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  body { display:flex; flex-direction:column; align-items:center; padding:16px 16px calc(16px + env(safe-area-inset-bottom)); }
+  h1 { font-weight:300; letter-spacing:.5em; font-size:1.1rem; margin:8px 0 0; color:var(--c); text-shadow:0 0 12px var(--c); }
+  #status { color:var(--dim); font-size:.85rem; margin:4px 0 12px; min-height:1.2em; }
+  #orbWrap { position:relative; width:170px; height:170px; margin:6px 0 10px; flex:none; }
+  #orb { position:absolute; inset:0; border-radius:50%; border:2px solid var(--c); box-shadow:0 0 30px var(--c), inset 0 0 30px rgba(46,230,255,.4); background:radial-gradient(circle, rgba(46,230,255,.35), rgba(46,230,255,.03) 70%); transition:transform .3s; cursor:pointer; }
+  #orb::after { content:""; position:absolute; inset:22%; border-radius:50%; border:1px dashed var(--c); animation:spin 8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  @keyframes pulse { 0%,100% { transform:scale(1); } 50% { transform:scale(1.12); } }
+  .listening { animation:pulse 1s ease-in-out infinite; border-color:#7dff9b !important; box-shadow:0 0 35px #7dff9b, inset 0 0 30px rgba(125,255,155,.4) !important; }
+  .speaking { animation:pulse .55s ease-in-out infinite; border-color:#ffd166 !important; box-shadow:0 0 35px #ffd166, inset 0 0 30px rgba(255,209,102,.4) !important; }
+  .thinking { animation:spin 1.2s linear infinite; }
+  #log { flex:1; width:100%; max-width:640px; overflow-y:auto; display:flex; flex-direction:column; gap:8px; padding:4px; }
+  .msg { padding:9px 13px; border-radius:14px; max-width:88%; line-height:1.4; font-size:.95rem; }
+  .you { align-self:flex-end; background:rgba(46,230,255,.12); border:1px solid rgba(46,230,255,.3); }
+  .bot { align-self:flex-start; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.12); }
+  .row { display:flex; gap:8px; width:100%; max-width:640px; margin-top:10px; }
+  button { background:transparent; color:var(--c); border:1px solid var(--c); border-radius:10px; padding:11px 14px; font-size:.95rem; }
+  button.main { flex:1; background:rgba(46,230,255,.15); }
+  button:active { background:rgba(46,230,255,.3); }
+  input[type=text], input[type=password], select { width:100%; background:#08202f; color:#cfefff; border:1px solid #1d5d70; border-radius:8px; padding:10px; font-size:.95rem; }
+  #settings { display:none; width:100%; max-width:640px; background:rgba(8,32,47,.9); border:1px solid #1d5d70; border-radius:12px; padding:12px; margin-bottom:8px; }
+  #settings label { display:block; font-size:.8rem; color:var(--dim); margin:8px 0 3px; }
+  #settings .note { font-size:.75rem; color:var(--dim); margin-top:8px; }
+  .chk { display:flex; align-items:center; gap:8px; margin-top:10px; font-size:.9rem; }
+</style>
+</head>
+<body>
+<h1>J.A.R.V.I.S.</h1>
+<div id="status">Toca el círculo para hablar</div>
+<div id="orbWrap"><div id="orb" role="button" aria-label="Hablar"></div></div>
+
+<div id="settings">
+  <label for="key">Clave de API de Anthropic (se guarda solo en este navegador)</label>
+  <input id="key" type="password" placeholder="sk-ant-..." autocomplete="off">
+  <label for="lang">Idioma</label>
+  <select id="lang">
+    <option value="es-ES">Español (España)</option>
+    <option value="es-MX">Español (México)</option>
+    <option value="es-CO">Español (Colombia)</option>
+    <option value="es-US">Español (EE. UU.)</option>
+    <option value="en-GB">English (UK)</option>
+    <option value="en-US">English (US)</option>
+  </select>
+  <label for="voice">Voz</label>
+  <select id="voice"></select>
+  <label for="name">¿Cómo quieres que te llame?</label>
+  <input id="name" type="text" placeholder="señor / señora / tu nombre">
+  <div class="chk"><input type="checkbox" id="conv"><label for="conv" style="margin:0;color:inherit;font-size:.9rem">Conversación continua (escucha de nuevo al terminar de hablar)</label></div>
+  <div class="note">Para crear una clave: console.anthropic.com → API Keys. Tiene costo por uso. La clave nunca sale de tu dispositivo salvo hacia Anthropic.</div>
+  <div class="row"><button class="main" id="save">Guardar</button></div>
+</div>
+
+<div id="log"></div>
+
+<div class="row">
+  <button id="gear">Ajustes</button>
+  <button id="clear">Borrar chat</button>
+  <button id="stop">Callar</button>
+</div>
+
+<script>
+(function () {
+  var hasVoiceOut = 'speechSynthesis' in window;
+  var speechSynthesis = window.speechSynthesis || { cancel:function(){}, getVoices:function(){ return []; }, speak:function(){} };
+  var $ = function (id) { return document.getElementById(id); };
+  var orb = $('orb'), statusEl = $('status'), logEl = $('log');
+  var MODEL = 'claude-sonnet-5-5';
+  var cfg = { key:'', lang:'es-ES', voice:'', name:'señor', conv:false };
+  var history = [], recog = null, busy = false, listening = false;
+
+  function load() {
+    try { var s = JSON.parse(localStorage.getItem('jarvis_cfg') || '{}'); for (var k in s) cfg[k] = s[k]; } catch (e) {}
+    $('key').value = cfg.key; $('lang').value = cfg.lang; $('name').value = cfg.name; $('conv').checked = cfg.conv;
+  }
+  function persist() { try { localStorage.setItem('jarvis_cfg', JSON.stringify(cfg)); } catch (e) {} }
+  function setStatus(t) { statusEl.textContent = t; }
+  function setState(cls) { orb.className = cls || ''; }
+  function addMsg(text, who) {
+    var d = document.createElement('div'); d.className = 'msg ' + who; d.textContent = text;
+    logEl.appendChild(d); logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  // ---- Voces ----
+  function fillVoices() {
+    if (!('speechSynthesis' in window)) return;
+    var all = speechSynthesis.getVoices(), pre = cfg.lang.slice(0, 2);
+    var list = all.filter(function (v) { return v.lang && v.lang.toLowerCase().indexOf(pre) === 0; });
+    if (!list.length) list = all;
+    var sel = $('voice'); sel.innerHTML = '';
+    list.forEach(function (v) {
+      var o = document.createElement('option'); o.value = v.name; o.textContent = v.name + ' (' + v.lang + ')'; sel.appendChild(o);
+    });
+    if (cfg.voice && list.some(function (v) { return v.name === cfg.voice; })) sel.value = cfg.voice;
+  }
+  if ('speechSynthesis' in window) { speechSynthesis.onvoiceschanged = fillVoices; fillVoices(); }
+  function pickVoice() {
+    var all = speechSynthesis.getVoices(), name = $('voice').value;
+    return all.filter(function (v) { return v.name === name; })[0] || null;
+  }
+
+  function speak(text) {
+    if (!hasVoiceOut) { setState(''); setStatus('Este visor no tiene voz. Ábrelo en Chrome.'); return; }
+    speechSynthesis.cancel();
+    var clean = text.replace(/[*_`#>~]/g, '').replace(/\[(.*?)\]\(.*?\)/g, '$1');
+    var u = new SpeechSynthesisUtterance(clean);
+    var v = pickVoice(); if (v) u.voice = v;
+    u.lang = cfg.lang; u.rate = 0.98; u.pitch = 0.85;
+    u.onstart = function () { setState('speaking'); setStatus('Hablando…'); };
+    u.onend = u.onerror = afterSpeak;
+    speechSynthesis.speak(u);
+  }
+  function afterSpeak() {
+    setState(''); setStatus('Toca el círculo para hablar');
+    if (cfg.conv) startListening();
+  }
+
+  // ---- IA ----
+  function systemPrompt() {
+    return 'Eres J.A.R.V.I.S., un asistente de voz elegante, ingenioso y muy eficiente, al estilo del mayordomo digital de Tony Stark. ' +
+      'Trata al usuario de "' + (cfg.name || 'señor') + '". Responde en el idioma del usuario. ' +
+      'Tus respuestas se leen en voz alta: sé breve (1 a 3 frases), natural, sin listas, sin markdown, sin emojis. ' +
+      'Tono sereno, cortés y con un toque sutil de humor seco. Si no sabes algo, dilo con franqueza. ' +
+      'No puedes controlar dispositivos ni apps; si te lo piden, explícalo con amabilidad.';
+  }
+  function ask(text) {
+    if (!cfg.key) { toggleSettings(true); setStatus('Falta tu clave de API'); return; }
+    busy = true; setState('thinking'); setStatus('Pensando…');
+    addMsg(text, 'you');
+    history.push({ role:'user', content:text });
+    fetch('https://api.anthropic.com/v1/messages', {
+      method:'POST',
+      headers:{
+        'content-type':'application/json',
+        'x-api-key':cfg.key,
+        'anthropic-version':'2023-06-01',
+        'anthropic-dangerous-direct-browser-access':'true'
+      },
+      body:JSON.stringify({ model:MODEL, max_tokens:400, system:systemPrompt(), messages:history.slice(-20) })
+    }).then(function (r) {
+      return r.json().then(function (j) { if (!r.ok) throw new Error((j.error && j.error.message) || ('Error ' + r.status)); return j; });
+    }).then(function (j) {
+      var t = (j.content || []).map(function (b) { return b.text || ''; }).join('').trim() || '…';
+      history.push({ role:'assistant', content:t });
+      addMsg(t, 'bot'); busy = false; speak(t);
+    }).catch(function (e) {
+      history.pop(); busy = false; setState('');
+      addMsg('Error: ' + e.message, 'bot'); setStatus('Algo falló. Revisa tu clave y conexión.');
+    });
+  }
+
+  // ---- Reconocimiento de voz ----
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  function startListening() {
+    if (busy || listening) return;
+    if (!SR) { setStatus('Este visor no tiene micrófono. Ábrelo en Chrome.'); return; }
+    speechSynthesis.cancel();
+    recog = new SR(); recog.lang = cfg.lang; recog.interimResults = false; recog.maxAlternatives = 1;
+    recog.onstart = function () { listening = true; setState('listening'); setStatus('Te escucho…'); };
+    recog.onresult = function (e) { var t = e.results[0][0].transcript.trim(); if (t) ask(t); };
+    recog.onerror = function (e) {
+      listening = false; setState('');
+      setStatus(e.error === 'not-allowed' ? 'Permite el micrófono en el navegador' : 'No te escuché, intenta de nuevo');
+    };
+    recog.onend = function () { listening = false; if (!busy && orb.className === 'listening') { setState(''); setStatus('Toca el círculo para hablar'); } };
+    try { recog.start(); } catch (e) {}
+  }
+
+  function toggleSettings(show) {
+    var s = $('settings'); s.style.display = (show === true || (show === undefined && s.style.display !== 'block')) ? 'block' : 'none';
+  }
+
+  orb.addEventListener('click', function () { if (listening) { try { recog.stop(); } catch (e) {} } else startListening(); });
+  $('gear').addEventListener('click', function () { toggleSettings(); });
+  $('lang').addEventListener('change', function () { cfg.lang = $('lang').value; cfg.voice = ''; fillVoices(); });
+  $('save').addEventListener('click', function () {
+    cfg.key = $('key').value.trim(); cfg.lang = $('lang').value; cfg.voice = $('voice').value;
+    cfg.name = $('name').value.trim() || 'señor'; cfg.conv = $('conv').checked;
+    persist(); toggleSettings(false); setStatus('Ajustes guardados');
+  });
+  $('clear').addEventListener('click', function () { history = []; logEl.innerHTML = ''; speechSynthesis.cancel(); setState(''); setStatus('Chat borrado'); });
+  $('stop').addEventListener('click', function () { cfg.conv = false; $('conv').checked = false; speechSynthesis.cancel(); try { recog && recog.stop(); } catch (e) {} setState(''); setStatus('Toca el círculo para hablar'); });
+
+  load(); fillVoices();
+  if (!cfg.key) toggleSettings(true);
+  addMsg('A su servicio. ¿En qué puedo ayudarle?', 'bot');
+})();
+</script>
+</body>
+</html>
